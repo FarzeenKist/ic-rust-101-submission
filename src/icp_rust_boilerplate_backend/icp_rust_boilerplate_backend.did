@@ -1,3 +1,21 @@
+type Error = variant { NotFound : record { msg : text } };
+type Result = variant { Ok : vec ToDo; Err : Error };
+type Result_1 = variant { Ok : ToDo; Err : Error };
+type ToDo = record {
+  id : nat64;
+  title : text;
+  updated_at : opt nat64;
+  body : text;
+  completed : bool;
+  deadline : nat64;
+  created_at : nat64;
+};
+type ToDoPayload = record { title : text; body : text; deadline : nat64 };
 service : {
-    "greet": (text) -> (text) query;
+  _get_comepleted_to_dos : () -> (Result) query;
+  add_message : (ToDoPayload) -> (opt ToDo);
+  complete_to_do : (nat64) -> (Result_1);
+  delete_message : (nat64) -> (Result_1);
+  get_message : (nat64) -> (Result_1) query;
+  update_message : (nat64, ToDoPayload) -> (Result_1);
 }
