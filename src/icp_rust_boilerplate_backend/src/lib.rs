@@ -73,18 +73,16 @@ fn get_message(id: u64) -> Result<ToDo, Error> {
 
 #[ic_cdk::query]
 fn _get_comepleted_to_dos() -> Result<Vec<ToDo>, Error> {
-    let length = STORAGE.with(|service| service.borrow().len());
+    
+    let todosmap : Vec<(u64, ToDo)> =  STORAGE.with(|service| service.borrow().iter().collect());
+    let length = todosmap.len();
     let mut todos: Vec<ToDo> = Vec::new();
     for key in 0..length {
-        match STORAGE.with(|service| service.borrow().get(&key)) {
-            Some(todo) => {
-                if todo.completed {
-                    todos.push(todo);
-                }else {
-                    continue;
-                }
-            }
-            None => {},
+        let todo = todosmap.get(key).unwrap().clone().1;
+        if todo.completed {
+            todos.push(todo);
+        }else{
+            continue;
         }
        
     }
@@ -96,6 +94,26 @@ fn _get_comepleted_to_dos() -> Result<Vec<ToDo>, Error> {
     }else{
         Ok(todos)
     }
+}
+
+
+#[ic_cdk::query]
+fn _get_all_to_dos() -> Result<Vec<ToDo>, Error> {
+    
+    let todosmap : Vec<(u64, ToDo)> =  STORAGE.with(|service| service.borrow().iter().collect());
+    let length = todosmap.len();
+    let mut todos: Vec<ToDo> = Vec::new();
+    for key in 0..length {
+        todos.push(todosmap.get(key).unwrap().clone().1);
+    }
+
+    if todos.len() > 0 {
+        Ok(todos)
+    }else {
+        Err(Error::NotFound {
+            msg: format!("There are currently no to-dos"),
+        })
+    }  
 }
 
 #[ic_cdk::update]
@@ -143,6 +161,7 @@ fn update_message(id: u64, payload: ToDoPayload) -> Result<ToDo, Error> {
 fn complete_to_do(id: u64) -> Result<ToDo, Error> {
     match STORAGE.with(|service| service.borrow().get(&id)) {
         Some(mut to_do) => {
+            assert!(!to_do.completed, "To-do is already completed.");
             to_do.completed = true;
             do_insert(&to_do);
             Ok(to_do)
