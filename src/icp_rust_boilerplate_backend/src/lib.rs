@@ -19,7 +19,7 @@ struct ToDo {
     completed: bool,
     created_at: u64,
     updated_at: Option<u64>,
-    deadline: u64,
+    deadline: Option<u64>,
     completed_late: bool // a boolean field that stores whether the to_do was completed after the deadline
 }
 
@@ -135,7 +135,7 @@ fn add_to_do(payload: ToDoPayload) -> Option<ToDo> {
         completed: false,
         created_at: time(),
         updated_at: None,
-        deadline: payload.deadline,
+        deadline: Some(payload.deadline),
         completed_late: false
     };
     do_insert(&to_do);
@@ -158,7 +158,6 @@ fn update_to_do(id: u64, payload: ToDoPayload) -> Result<ToDo, Error> {
                 })
             }
             // update to-do with the payload
-            to_do.deadline = payload.deadline;
             to_do.body = payload.body;
             to_do.title = payload.title;
             to_do.updated_at = Some(time());
@@ -191,7 +190,7 @@ fn complete_to_do(id: u64) -> Result<ToDo, Error> {
             // Ensure that this function can only mutate to-dos that haven't been completed
             assert!(!to_do.completed, "To-do is already completed.");
             // if deadline of to-do is over, set the completed_late field to true
-            if  time()  > to_do.deadline{
+            if  to_do.deadline.is_some_and(|deadline| time() > deadline){
                 to_do.completed_late = true;
             }
             to_do.completed = true;
@@ -241,11 +240,12 @@ enum Error {
     NotAuthorized {msg: String , caller: Principal},
 }
 
-// a helper method to get a message by id. used in get_message/update_message
+// a helper method to get a to-do by id
 fn _get_to_do(id: &u64) -> Option<ToDo> {
     STORAGE.with(|service| service.borrow().get(id))
 }
 
+// a helper function to check whether the caller is the owner of the to-do
 fn _check_if_owner(to_do: &ToDo) -> bool {
     if to_do.owner.to_string() != caller().to_string(){
         false  
