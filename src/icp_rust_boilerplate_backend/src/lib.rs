@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate serde;
-use candid::{Decode, Encode};
-use ic_cdk::api::time;
+use candid::{Decode, Encode, Principal};
+use ic_cdk::api::{time, caller};
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
 use ic_stable_structures::{BoundedStorable, Cell, DefaultMemoryImpl, StableBTreeMap, Storable};
 use std::{borrow::Cow, cell::RefCell};
@@ -9,16 +9,20 @@ use std::{borrow::Cow, cell::RefCell};
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 type IdCell = Cell<u64, Memory>;
 
-#[derive(candid::CandidType, Clone, Serialize, Deserialize, Default)]
+
+#[derive(candid::CandidType, Clone, Serialize, Deserialize)]
 struct ToDo {
+    owner: Principal,
     id: u64,
     title: String,
     body: String,
     completed: bool,
     created_at: u64,
     updated_at: Option<u64>,
-    deadline: u64
+    deadline: u64,
+    completed_late: bool // a boolean field that stores whether the to_do was completed after the deadline
 }
+
 
 // a trait that must be implemented for a struct that is stored in a stable struct
 impl Storable for ToDo {
@@ -61,24 +65,29 @@ struct ToDoPayload {
 }
 
 #[ic_cdk::query]
-fn get_message(id: u64) -> Result<ToDo, Error> {
-    match _get_message(&id) {
-        Some(message) => Ok(message),
+fn get_to_do(id: u64) -> Result<ToDo, Error> {
+    match _get_to_do(&id) {
+        Some(to_do) => Ok(to_do),
         None => Err(Error::NotFound {
-            msg: format!("a message with id={} not found", id),
+            msg: format!("a to-do with id={} not found", id),
         }),
     }
 }
 
 
 #[ic_cdk::query]
-fn _get_comepleted_to_dos() -> Result<Vec<ToDo>, Error> {
+fn get_completed_to_dos() -> Result<Vec<ToDo>, Error> {
     
     let todosmap : Vec<(u64, ToDo)> =  STORAGE.with(|service| service.borrow().iter().collect());
     let length = todosmap.len();
     let mut todos: Vec<ToDo> = Vec::new();
+    
+    // loop through the todosmap to find and push all completed to-dos to the todos Vec
     for key in 0..length {
+        // fetch to-do from todosmap with index key
         let todo = todosmap.get(key).unwrap().clone().1;
+        // if to-do is completed, push to the todos Vec
+        // otherwise, continue to the next iteration
         if todo.completed {
             todos.push(todo);
         }else{
@@ -86,7 +95,8 @@ fn _get_comepleted_to_dos() -> Result<Vec<ToDo>, Error> {
         }
        
     }
-    
+    // if no todo has been completed, return an error
+    // otherwise return the completed todos
     if todos.len() == 0 {
         Err(Error::NotFound {
             msg: format!("There are currently no completed to-dos"),
@@ -97,60 +107,67 @@ fn _get_comepleted_to_dos() -> Result<Vec<ToDo>, Error> {
 }
 
 
+// function to fetch and return all todos
 #[ic_cdk::query]
-fn _get_all_to_dos() -> Result<Vec<ToDo>, Error> {
-    
-    let todosmap : Vec<(u64, ToDo)> =  STORAGE.with(|service| service.borrow().iter().collect());
-    let length = todosmap.len();
-    let mut todos: Vec<ToDo> = Vec::new();
-    for key in 0..length {
-        todos.push(todosmap.get(key).unwrap().clone().1);
-    }
-
-    if todos.len() > 0 {
-        Ok(todos)
-    }else {
-        Err(Error::NotFound {
+fn get_all_to_dos() -> Result<Vec<ToDo>, Error> {
+    let todos : Vec<ToDo> =  STORAGE.with(|service| service.borrow().iter().map(|to_do| to_do.1).collect());
+    if todos.len() == 0 {
+        return Err(Error::NotFound {
             msg: format!("There are currently no to-dos"),
-        })
-    }  
+        });
+    }
+    Ok(todos)
 }
 
 #[ic_cdk::update]
-fn add_message(message: ToDoPayload) -> Option<ToDo> {
+fn add_to_do(payload: ToDoPayload) -> Option<ToDo> {
     let id = ID_COUNTER
         .with(|counter| {
             let current_value = *counter.borrow().get();
             counter.borrow_mut().set(current_value + 1)
         })
         .expect("cannot increment id counter");
-    let message = ToDo {
+    let to_do = ToDo {
+        owner: caller(),
         id,
-        title: message.title,
-        body: message.body,
+        title: payload.title,
+        body: payload.body,
         completed: false,
         created_at: time(),
         updated_at: None,
-        deadline: message.deadline
+        deadline: payload.deadline,
+        completed_late: false
     };
-    do_insert(&message);
-    Some(message)
+    do_insert(&to_do);
+    Some(to_do)
 }
 
+
 #[ic_cdk::update]
-fn update_message(id: u64, payload: ToDoPayload) -> Result<ToDo, Error> {
+fn update_to_do(id: u64, payload: ToDoPayload) -> Result<ToDo, Error> {
     match STORAGE.with(|service| service.borrow().get(&id)) {
-        Some(mut message) => {
-            message.deadline = payload.deadline;
-            message.body = payload.body;
-            message.title = payload.title;
-            message.updated_at = Some(time());
-            do_insert(&message);
-            Ok(message)
+        Some(mut to_do) => {
+            // if caller isn't the owner of the to-do, return an error
+            if !_check_if_owner(&to_do){
+                return Err(Error::NotAuthorized {
+                    msg: format!(
+                        "couldn't update a to-do with id={}. to-do not found",
+                        id
+                    ),
+                    caller: caller()
+                })
+            }
+            // update to-do with the payload
+            to_do.deadline = payload.deadline;
+            to_do.body = payload.body;
+            to_do.title = payload.title;
+            to_do.updated_at = Some(time());
+            do_insert(&to_do);
+            Ok(to_do)
         }
         None => Err(Error::NotFound {
             msg: format!(
-                "couldn't update a message with id={}. message not found",
+                "couldn't update a to-do with id={}. to-do not found",
                 id
             ),
         }),
@@ -161,14 +178,29 @@ fn update_message(id: u64, payload: ToDoPayload) -> Result<ToDo, Error> {
 fn complete_to_do(id: u64) -> Result<ToDo, Error> {
     match STORAGE.with(|service| service.borrow().get(&id)) {
         Some(mut to_do) => {
+            // if caller isn't the owner of the to-do, return an error
+            if !_check_if_owner(&to_do){
+                return Err(Error::NotAuthorized {
+                    msg: format!(
+                        "You're not the owner of the to-do with id={}",
+                        id
+                    ),
+                    caller: caller()
+                })
+            }
+            // Ensure that this function can only mutate to-dos that haven't been completed
             assert!(!to_do.completed, "To-do is already completed.");
+            // if deadline of to-do is over, set the completed_late field to true
+            if  time()  > to_do.deadline{
+                to_do.completed_late = true;
+            }
             to_do.completed = true;
             do_insert(&to_do);
             Ok(to_do)
         }
         None => Err(Error::NotFound {
             msg: format!(
-                "couldn't update a message with id={}. message not found",
+                "couldn't update a to-do with id={}. To-do not found",
                 id
             ),
         }),
@@ -176,17 +208,27 @@ fn complete_to_do(id: u64) -> Result<ToDo, Error> {
 }
 
 // helper method to perform insert.
-fn do_insert(message: &ToDo) {
-    STORAGE.with(|service| service.borrow_mut().insert(message.id, message.clone()));
+fn do_insert(to_do: &ToDo) {
+    STORAGE.with(|service| service.borrow_mut().insert(to_do.id, to_do.clone()));
 }
 
 #[ic_cdk::update]
-fn delete_message(id: u64) -> Result<ToDo, Error> {
+fn delete_to_do(id: u64) -> Result<ToDo, Error> {
+    // if caller isn't the owner of the to-do, return an error message
+    if !_check_if_owner(&_get_to_do(&id).unwrap().clone()){
+        return Err(Error::NotAuthorized {
+            msg: format!(
+                "You're not the owner of the to-do with id={}",
+                id
+            ),
+            caller: caller()
+        })
+    }
     match STORAGE.with(|service| service.borrow_mut().remove(&id)) {
-        Some(message) => Ok(message),
+        Some(to_do) => Ok(to_do),
         None => Err(Error::NotFound {
             msg: format!(
-                "couldn't delete a message with id={}. message not found.",
+                "couldn't delete a to-do with id={}. To-do not found.",
                 id
             ),
         }),
@@ -196,11 +238,20 @@ fn delete_message(id: u64) -> Result<ToDo, Error> {
 #[derive(candid::CandidType, Deserialize, Serialize)]
 enum Error {
     NotFound { msg: String },
+    NotAuthorized {msg: String , caller: Principal},
 }
 
 // a helper method to get a message by id. used in get_message/update_message
-fn _get_message(id: &u64) -> Option<ToDo> {
+fn _get_to_do(id: &u64) -> Option<ToDo> {
     STORAGE.with(|service| service.borrow().get(id))
+}
+
+fn _check_if_owner(to_do: &ToDo) -> bool {
+    if to_do.owner.to_string() != caller().to_string(){
+        false  
+    }else{
+        true
+    }
 }
 
 
