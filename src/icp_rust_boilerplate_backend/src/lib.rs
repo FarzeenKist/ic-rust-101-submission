@@ -213,8 +213,9 @@ fn do_insert(to_do: &ToDo) {
 
 #[ic_cdk::update]
 fn delete_to_do(id: u64) -> Result<ToDo, Error> {
+    let to_do = _get_to_do(&id).expect("Todo not found.");
     // if caller isn't the owner of the to-do, return an error message
-    if !_check_if_owner(&_get_to_do(&id).unwrap().clone()){
+    if !_check_if_owner(&to_do){
         return Err(Error::NotAuthorized {
             msg: format!(
                 "You're not the owner of the to-do with id={}",
